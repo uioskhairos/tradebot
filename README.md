@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GridPilot Trading Bot Platform
 
-## Getting Started
+Firebase + Next.js scaffold for a futures trading bot subscription platform.
 
-First, run the development server:
+## Core concept
+
+- Users sign up with email/password or Google through Firebase Authentication.
+- Users fund an internal fee wallet used to pay trading fees.
+- Users subscribe to one of two bot types:
+	- Support/Resistance Pattern Bot
+	- Hedged Grid Martingale Bot
+- Users select a futures exchange and submit API credentials.
+- Firebase Cloud Functions own bot execution, exchange API access, trade-ledger writes, and fee deduction.
+- Every completed trade charges a 2% platform fee based on position size.
+- Bots stop automatically when the fee wallet balance reaches zero or cannot cover the next trade fee.
+
+## Exchange catalog
+
+The app includes a data-driven futures exchange catalog in `lib/exchanges.ts`:
+
+- Binance USDⓈ-M Futures
+- Bybit Unified Trading
+- OKX Futures & Swap
+- Bitget Futures
+- KuCoin Futures
+- Gate.io Futures
+- MEXC Futures
+- Kraken Futures
+- Deribit
+- Coinbase International Exchange
+
+Always confirm regional eligibility, product availability, and API permissions before enabling live trading.
+
+## Firebase setup
+
+1. Create a Firebase project.
+2. Enable Authentication providers:
+	 - Email/password
+	 - Google
+3. Create a Firestore database.
+4. Copy `.env.example` to `.env.local` and fill in the Firebase web app values.
+5. Deploy or emulate Firestore rules from `firestore.rules`.
+6. Install Cloud Functions dependencies inside `functions/` before deployment.
+
+## Local development
+
+Install dependencies and run the app:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+The UI runs in demo mode until Firebase environment variables are configured.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Cloud Functions scaffold
 
-## Learn More
+Cloud Functions live in `functions/src/index.ts` and include:
 
-To learn more about Next.js, take a look at the following resources:
+- `connectExchangeAccount` — callable function for API credential intake. Production must encrypt secrets with Cloud KMS or Secret Manager.
+- `createBotInstance` — callable function that creates a bot after wallet checks.
+- `runTradingBots` — scheduled function placeholder for exchange adapters, strategy execution, fee deduction, and auto-stop logic.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Install and build functions:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+cd functions
+npm install
+npm run build
+```
 
-## Deploy on Vercel
+## Security notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- Never store raw exchange API secrets in client-readable Firestore paths.
+- Exchange API keys must have trading-only permissions and withdrawals disabled.
+- Use KMS/Secret Manager encryption before live trading.
+- Add payment-provider webhooks before approving real fee wallet top-ups.
+- Add exchange-specific risk limits, rate limits, audit logs, and emergency kill switches.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Validation
+
+Run:
+
+```bash
+npm run lint
+npm run build
+```
