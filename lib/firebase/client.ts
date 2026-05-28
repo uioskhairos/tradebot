@@ -10,15 +10,23 @@ export interface FirebaseClientServices {
   functions: Functions;
 }
 
-const requiredEnv = [
-  "NEXT_PUBLIC_FIREBASE_API_KEY",
-  "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN",
-  "NEXT_PUBLIC_FIREBASE_PROJECT_ID",
-  "NEXT_PUBLIC_FIREBASE_APP_ID",
-] as const;
+const firebasePublicConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
+};
 
 export function hasFirebaseBrowserConfig() {
-  return requiredEnv.every((key) => Boolean(process.env[key]));
+  return Boolean(
+    firebasePublicConfig.apiKey &&
+      firebasePublicConfig.authDomain &&
+      firebasePublicConfig.projectId &&
+      firebasePublicConfig.appId,
+  );
 }
 
 export function getFirebaseClientServices(): FirebaseClientServices | null {
@@ -28,15 +36,7 @@ export function getFirebaseClientServices(): FirebaseClientServices | null {
 
   const app = getApps().length
     ? getApp()
-    : initializeApp({
-        apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-        authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-        appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-        measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
-      });
+    : initializeApp(firebasePublicConfig);
 
   return {
     app,

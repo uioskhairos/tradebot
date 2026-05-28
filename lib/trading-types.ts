@@ -56,7 +56,6 @@ export interface BotPlan {
   type: BotType;
   name: string;
   summary: string;
-  monthlyPrice: number;
   feeRate: number;
   features: string[];
   riskWarning: string;
@@ -67,7 +66,7 @@ export interface BotInstance {
   uid: string;
   type: BotType;
   exchangeId: ExchangeId;
-  marketSymbol: string;
+  marketSymbols: string[];
   status: BotStatus;
   positionSizeUsd: number;
   feeRate: number;
@@ -92,7 +91,7 @@ export interface TradeLedgerEntry {
 export interface BotConfigurationDraft {
   botType: BotType;
   exchangeId: ExchangeId;
-  marketSymbol: string;
+  marketSymbols: string[];
   positionSizeUsd: number;
 }
 

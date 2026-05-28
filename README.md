@@ -1,15 +1,15 @@
 # GridPilot Trading Bot Platform
 
-Firebase + Next.js scaffold for a futures trading bot subscription platform.
+Firebase + Next.js scaffold for a futures trading bot platform with per-trade fees.
 
 ## Core concept
 
 - Users sign up with email/password or Google through Firebase Authentication.
 - Users fund an internal fee wallet used to pay trading fees.
-- Users subscribe to one of two bot types:
+- Users choose one of two bot types:
 	- Support/Resistance Pattern Bot
 	- Hedged Grid Martingale Bot
-- Users select a futures exchange and submit API credentials.
+- Users select a futures exchange, choose multiple trading pairs from the top 100, and submit API credentials.
 - Firebase Cloud Functions own bot execution, exchange API access, trade-ledger writes, and fee deduction.
 - Every completed trade charges a 2% platform fee based on position size.
 - Bots stop automatically when the fee wallet balance reaches zero or cannot cover the next trade fee.
@@ -53,7 +53,7 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-The UI runs in demo mode until Firebase environment variables are configured.
+The UI requires Firebase environment variables and uses real Firebase accounts.
 
 ## Cloud Functions scaffold
 

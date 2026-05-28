@@ -11,7 +11,7 @@ const tradeFeeRate = 0.02;
 interface CreateBotRequest {
   botType: "support-resistance" | "grid-martingale";
   exchangeId: string;
-  marketSymbol: string;
+  marketSymbols: string[];
   positionSizeUsd: number;
 }
 
@@ -46,7 +46,7 @@ export const connectExchangeAccount = onCall<ExchangeCredentialRequest>(async (r
 
 export const createBotInstance = onCall<CreateBotRequest>(async (request) => {
   const uid = requireUid(request.auth?.uid);
-  const marketSymbol = requireString(request.data.marketSymbol, "marketSymbol").toUpperCase();
+  const marketSymbols = requireStringArray(request.data.marketSymbols, "marketSymbols");
   const positionSizeUsd = Number(request.data.positionSizeUsd);
 
   if (!Number.isFinite(positionSizeUsd) || positionSizeUsd < 10) {
@@ -65,7 +65,8 @@ export const createBotInstance = onCall<CreateBotRequest>(async (request) => {
       uid,
       type: request.data.botType,
       exchangeId: requireString(request.data.exchangeId, "exchangeId"),
-      marketSymbol,
+      marketSymbols,
+      marketSymbol: marketSymbols[0],
       status,
       positionSizeUsd,
       feeRate: tradeFeeRate,
@@ -149,4 +150,20 @@ function maskSecret(value: string) {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function requireStringArray(value: unknown, fieldName: string) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new HttpsError("invalid-argument", `${fieldName} must include at least one value.`);
+  }
+
+  const normalized = value
+    .map((item) => (typeof item === "string" ? item.trim().toUpperCase() : ""))
+    .filter((item) => item.length > 0);
+
+  if (normalized.length === 0) {
+    throw new HttpsError("invalid-argument", `${fieldName} must include at least one valid symbol.`);
+  }
+
+  return Array.from(new Set(normalized));
 }

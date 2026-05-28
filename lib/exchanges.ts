@@ -1,4 +1,4 @@
-import type { BotPlan, ExchangeDefinition } from "./trading-types";
+import type { BotPlan, ExchangeDefinition, ExchangeId } from "./trading-types";
 
 const apiKeySecretFields = [
   { key: "apiKey", label: "API key", secret: false, required: true },
@@ -129,11 +129,10 @@ export const botPlans: BotPlan[] = [
     name: "Support/Resistance Pattern Bot",
     summary:
       "Looks for reaction zones, breakout retests, and risk-defined entries around support and resistance patterns.",
-    monthlyPrice: 49,
     feeRate: 0.02,
     features: [
       "Pattern-based entries",
-      "Configurable futures market symbol",
+      "Multi-pair selection from top exchange markets",
       "Cloud Function managed execution",
       "2% fee per completed trade based on position size",
     ],
@@ -144,17 +143,45 @@ export const botPlans: BotPlan[] = [
     name: "Hedged Grid Martingale Bot",
     summary:
       "Opens long and short exposure, places pending grid orders, and increases grid size using a double martingale model.",
-    monthlyPrice: 99,
     feeRate: 0.02,
     features: [
       "Long and short hedge mode concept",
-      "Pending grid order ladder",
+      "Multi-pair pending grid order ladder",
       "Martingaled position sizing",
       "Auto-stop when fee wallet reaches zero",
     ],
     riskWarning: "Martingale strategies can compound losses quickly and require strict risk limits.",
   },
 ];
+
+export const top100UsdtPairs = [
+  "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "LINKUSDT",
+  "TRXUSDT", "LTCUSDT", "BCHUSDT", "XLMUSDT", "ATOMUSDT", "NEARUSDT", "FILUSDT", "APTUSDT", "ARBUSDT", "OPUSDT",
+  "SUIUSDT", "SEIUSDT", "INJUSDT", "TIAUSDT", "RUNEUSDT", "AAVEUSDT", "MKRUSDT", "UNIUSDT", "SUSHIUSDT", "SNXUSDT",
+  "CRVUSDT", "DYDXUSDT", "GMXUSDT", "PENDLEUSDT", "LDOUSDT", "ENSUSDT", "GRTUSDT", "ALGOUSDT", "HBARUSDT", "VETUSDT",
+  "ICPUSDT", "ETCUSDT", "THETAUSDT", "FLOWUSDT", "EGLDUSDT", "KASUSDT", "MATICUSDT", "WLDUSDT", "PEPEUSDT", "SHIBUSDT",
+  "FLOKIUSDT", "BONKUSDT", "JUPUSDT", "PYTHUSDT", "JTOUSDT", "WIFUSDT", "NOTUSDT", "TONUSDT", "ONDOUSDT", "ORDIUSDT",
+  "1000SATSUSDT", "ARKMUSDT", "BLURUSDT", "BOMEUSDT", "MEMEUSDT", "CELOUSDT", "CHZUSDT", "ENJUSDT", "MANAUSDT", "SANDUSDT",
+  "AXSUSDT", "GALAUSDT", "IMXUSDT", "APEUSDT", "COMPUSDT", "ZRXUSDT", "YFIUSDT", "KSMUSDT", "ROSEUSDT", "ZILUSDT",
+  "MINAUSDT", "KAVAUSDT", "QTUMUSDT", "NEOUSDT", "IOTAUSDT", "DASHUSDT", "ZECUSDT", "RVNUSDT", "ANKRUSDT", "ONEUSDT",
+  "CFXUSDT", "STXUSDT", "FETUSDT", "AGIXUSDT", "OCEANUSDT", "IDUSDT", "AEVOUSDT", "STRKUSDT", "ALTUSDT", "PIXELUSDT",
+];
+
+const exchangePairBlockList: Partial<Record<ExchangeId, string[]>> = {
+  deribit: [
+    "XRPUSDT", "DOGEUSDT", "ADAUSDT", "DOTUSDT", "TONUSDT", "ONDOUSDT", "PEPEUSDT", "SHIBUSDT", "FLOKIUSDT", "BONKUSDT",
+    "WIFUSDT", "NOTUSDT", "BOMEUSDT", "MEMEUSDT", "AEVOUSDT", "STRKUSDT", "ALTUSDT", "PIXELUSDT",
+  ],
+  "coinbase-international": [
+    "1000SATSUSDT", "PEPEUSDT", "SHIBUSDT", "FLOKIUSDT", "BONKUSDT", "WIFUSDT", "NOTUSDT", "BOMEUSDT", "MEMEUSDT", "ARKMUSDT",
+  ],
+  "kraken-futures": ["1000SATSUSDT", "NOTUSDT", "BOMEUSDT", "MEMEUSDT", "AEVOUSDT", "ALTUSDT", "PIXELUSDT"],
+};
+
+export function getTopPairsForExchange(exchangeId: ExchangeId) {
+  const blocked = new Set(exchangePairBlockList[exchangeId] ?? []);
+  return top100UsdtPairs.filter((pair) => !blocked.has(pair));
+}
 
 export function getExchangeById(exchangeId: string) {
   return supportedExchanges.find((exchange) => exchange.id === exchangeId);

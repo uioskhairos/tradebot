@@ -10,6 +10,7 @@ import {
 import {
   collection,
   doc,
+  getDoc,
   limit,
   onSnapshot,
   orderBy,
@@ -42,24 +43,36 @@ export function subscribeToAuthState(onChange: (user: User | null) => void): Uns
 }
 
 export async function signInWithGoogle() {
-  const services = getRequiredServices();
-  const credential = await signInWithPopup(services.auth, new GoogleAuthProvider());
-  await upsertUserProfile(credential.user);
-  return credential.user;
+  try {
+    const services = getRequiredServices();
+    const credential = await signInWithPopup(services.auth, new GoogleAuthProvider());
+    await upsertUserProfile(credential.user);
+    return credential.user;
+  } catch (error) {
+    throw toFriendlyFirebaseError(error);
+  }
 }
 
 export async function signInWithEmail(email: string, password: string) {
-  const services = getRequiredServices();
-  const credential = await signInWithEmailAndPassword(services.auth, email, password);
-  await upsertUserProfile(credential.user);
-  return credential.user;
+  try {
+    const services = getRequiredServices();
+    const credential = await signInWithEmailAndPassword(services.auth, email, password);
+    await upsertUserProfile(credential.user);
+    return credential.user;
+  } catch (error) {
+    throw toFriendlyFirebaseError(error);
+  }
 }
 
 export async function registerWithEmail(email: string, password: string) {
-  const services = getRequiredServices();
-  const credential = await createUserWithEmailAndPassword(services.auth, email, password);
-  await upsertUserProfile(credential.user);
-  return credential.user;
+  try {
+    const services = getRequiredServices();
+    const credential = await createUserWithEmailAndPassword(services.auth, email, password);
+    await upsertUserProfile(credential.user);
+    return credential.user;
+  } catch (error) {
+    throw toFriendlyFirebaseError(error);
+  }
 }
 
 export async function signOutCurrentUser() {
@@ -70,10 +83,10 @@ export async function signOutCurrentUser() {
 export async function upsertUserProfile(user: User) {
   const services = getRequiredServices();
   const userRef = doc(services.db, "users", user.uid);
+  const existingProfile = await getDoc(userRef);
 
-  await setDoc(
-    userRef,
-    {
+  if (!existingProfile.exists()) {
+    await setDoc(userRef, {
       uid: user.uid,
       email: user.email,
       displayName: user.displayName,
@@ -81,9 +94,15 @@ export async function upsertUserProfile(user: User) {
       feeWalletBalance: 0,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
+    });
+    return;
+  }
+
+  await updateDoc(userRef, {
+    email: user.email,
+    displayName: user.displayName,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export function subscribeToUserProfile(
@@ -185,4 +204,23 @@ function getRequiredServices() {
   }
 
   return services;
+}
+
+function toFriendlyFirebaseError(error: unknown) {
+  if (isFirebaseErrorWithCode(error, "permission-denied")) {
+    return new Error(
+      "Firestore permission denied. Deploy/update firestore.rules and ensure users can create their own profile document.",
+    );
+  }
+
+  return error instanceof Error ? error : new Error("Something went wrong.");
+}
+
+function isFirebaseErrorWithCode(error: unknown, code: string) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeCode = (error as { code?: unknown }).code;
+  return maybeCode === code || maybeCode === `auth/${code}` || maybeCode === `firestore/${code}`;
 }

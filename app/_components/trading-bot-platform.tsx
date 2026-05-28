@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { User } from "firebase/auth";
-import { botPlans, formatCurrency, getExchangeById, supportedExchanges } from "@/lib/exchanges";
+import { IconBot, IconCheck, IconList, IconRocket, IconTrendUp, IconWallet } from "./icons";
+import { botPlans, formatCurrency, getExchangeById, getTopPairsForExchange, supportedExchanges } from "@/lib/exchanges";
 import { hasFirebaseBrowserConfig } from "@/lib/firebase/client";
 import {
   connectExchangeAccount,
@@ -11,7 +12,6 @@ import {
   requestFeeWalletTopUp,
   signInWithEmail,
   signInWithGoogle,
-  signOutCurrentUser,
   subscribeToAuthState,
   subscribeToBotInstances,
   subscribeToTradeLedger,
@@ -27,72 +27,6 @@ import type {
   UserProfile,
 } from "@/lib/trading-types";
 
-const demoProfile: UserProfile = {
-  uid: "demo-user",
-  email: "demo@gridpilot.local",
-  displayName: "Demo Trader",
-  feeWalletBalance: 248.7,
-  currency: "USD",
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-};
-
-const demoBots: BotInstance[] = [
-  {
-    id: "bot_sr_btc",
-    uid: "demo-user",
-    type: "support-resistance",
-    exchangeId: "bybit",
-    marketSymbol: "BTCUSDT",
-    status: "active",
-    positionSizeUsd: 500,
-    feeRate: 0.02,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: "bot_grid_eth",
-    uid: "demo-user",
-    type: "grid-martingale",
-    exchangeId: "okx",
-    marketSymbol: "ETH-USDT-SWAP",
-    status: "paused",
-    positionSizeUsd: 300,
-    feeRate: 0.02,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-];
-
-const demoLedger: TradeLedgerEntry[] = [
-  {
-    id: "ledger_1",
-    botId: "bot_sr_btc",
-    uid: "demo-user",
-    exchangeId: "bybit",
-    marketSymbol: "BTCUSDT",
-    side: "long",
-    outcome: "win",
-    positionSizeUsd: 500,
-    feeCharged: 10,
-    walletBalanceAfter: 248.7,
-    executedAt: new Date().toISOString(),
-  },
-  {
-    id: "ledger_2",
-    botId: "bot_grid_eth",
-    uid: "demo-user",
-    exchangeId: "okx",
-    marketSymbol: "ETH-USDT-SWAP",
-    side: "short",
-    outcome: "loss",
-    positionSizeUsd: 300,
-    feeCharged: 6,
-    walletBalanceAfter: 258.7,
-    executedAt: new Date(Date.now() - 1000 * 60 * 52).toISOString(),
-  },
-];
-
 const emptyCredentials: ExchangeCredentialDraft = {
   apiKey: "",
   apiSecret: "",
@@ -100,560 +34,916 @@ const emptyCredentials: ExchangeCredentialDraft = {
   accountId: "",
 };
 
-export default function TradingBotPlatform() {
+type TradingView = "full" | "login" | "dashboard" | "settings";
+
+/* â”€â”€â”€ Shared style helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+const sectionStyle: React.CSSProperties = {
+  maxWidth: "80rem",
+  margin: "0 auto",
+  padding: "2rem 1.25rem",
+  width: "100%",
+};
+
+/* â”€â”€â”€ Main component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+export default function TradingBotPlatform({ view = "full" }: { view?: TradingView }) {
   const firebaseConfigured = hasFirebaseBrowserConfig();
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(firebaseConfigured ? null : demoProfile);
-  const [bots, setBots] = useState<BotInstance[]>(firebaseConfigured ? [] : demoBots);
-  const [ledger, setLedger] = useState<TradeLedgerEntry[]>(firebaseConfigured ? [] : demoLedger);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [bots, setBots] = useState<BotInstance[]>([]);
+  const [ledger, setLedger] = useState<TradeLedgerEntry[]>([]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [selectedBotType, setSelectedBotType] = useState<BotType>("support-resistance");
   const [selectedExchangeId, setSelectedExchangeId] = useState<ExchangeId>("binance-usdm");
-  const [marketSymbol, setMarketSymbol] = useState("BTCUSDT");
+  const [selectedMarketSymbols, setSelectedMarketSymbols] = useState<string[]>(["BTCUSDT"]);
   const [positionSizeUsd, setPositionSizeUsd] = useState(250);
   const [topUpAmount, setTopUpAmount] = useState(100);
   const [credentials, setCredentials] = useState<ExchangeCredentialDraft>(emptyCredentials);
-  const [statusMessage, setStatusMessage] = useState("Demo mode is active until Firebase env vars are configured.");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [statusTone, setStatusTone] = useState<"success" | "error" | "info">("info");
   const [isBusy, setIsBusy] = useState(false);
 
   const selectedPlan = useMemo(
     () => botPlans.find((plan) => plan.type === selectedBotType) ?? botPlans[0],
-    [selectedBotType],
+    [selectedBotType]
   );
+  const availableMarketSymbols = useMemo(() => getTopPairsForExchange(selectedExchangeId), [selectedExchangeId]);
+
+  function handleExchangeChange(exchangeId: ExchangeId) {
+    setSelectedExchangeId(exchangeId);
+    const nextAvailable = getTopPairsForExchange(exchangeId);
+    setSelectedMarketSymbols((prev) => {
+      const filtered = prev.filter((s) => nextAvailable.includes(s));
+      return filtered.length > 0 ? filtered : nextAvailable[0] ? [nextAvailable[0]] : [];
+    });
+  }
 
   useEffect(() => subscribeToAuthState(setUser), []);
 
   useEffect(() => {
-    if (!firebaseConfigured || !user) {
-      return undefined;
-    }
-
+    if (!firebaseConfigured || !user) return;
     return subscribeToUserProfile(user.uid, setProfile);
   }, [firebaseConfigured, user]);
 
   useEffect(() => {
-    if (!firebaseConfigured || !user) {
-      return undefined;
-    }
-
+    if (!firebaseConfigured || !user) return;
     return subscribeToBotInstances(user.uid, setBots);
   }, [firebaseConfigured, user]);
 
   useEffect(() => {
-    if (!firebaseConfigured || !user) {
-      return undefined;
-    }
-
+    if (!firebaseConfigured || !user) return;
     return subscribeToTradeLedger(user.uid, setLedger);
   }, [firebaseConfigured, user]);
 
-  const canUseFirebase = firebaseConfigured && user;
+  const canUseFirebase = Boolean(firebaseConfigured && user);
   const projectedFee = positionSizeUsd * selectedPlan.feeRate;
+  const activeProfile = canUseFirebase ? profile : null;
+  const activeBots = canUseFirebase ? bots : [];
+  const activeLedger = canUseFirebase ? ledger : [];
 
   async function runAction(action: () => Promise<unknown>, successMessage: string) {
     setIsBusy(true);
     setStatusMessage("");
-
     try {
       await action();
       setStatusMessage(successMessage);
+      setStatusTone("success");
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : "Something went wrong.");
+      setStatusTone("error");
     } finally {
       setIsBusy(false);
     }
   }
 
-  function handleDemoLogin() {
-    setProfile(demoProfile);
-    setBots(demoBots);
-    setLedger(demoLedger);
-    setStatusMessage("Demo dashboard loaded. Configure Firebase to enable real auth and Cloud Functions.");
-  }
-
   async function handleEmailSubmit(mode: "login" | "register") {
     await runAction(
       async () => {
-        if (mode === "register") {
-          await registerWithEmail(email, password);
-        } else {
-          await signInWithEmail(email, password);
-        }
+        if (mode === "register") await registerWithEmail(email, password);
+        else await signInWithEmail(email, password);
       },
-      mode === "register" ? "Account created." : "Signed in.",
+      mode === "register" ? "Account created successfully." : "Welcome back!"
     );
   }
 
   async function handleConnectExchange() {
-    await runAction(
-      async () => {
-        if (!canUseFirebase) {
-          throw new Error("Sign in with Firebase before storing exchange credentials.");
-        }
-
-        await connectExchangeAccount(credentials);
-      },
-      "Exchange credentials submitted securely to Cloud Functions.",
-    );
+    await runAction(async () => {
+      if (!canUseFirebase) throw new Error("Sign in before storing exchange credentials.");
+      await connectExchangeAccount(credentials);
+    }, "Exchange credentials saved securely.");
   }
 
   async function handleCreateBot() {
-    await runAction(
-      async () => {
-        const draft: BotConfigurationDraft = {
-          botType: selectedBotType,
-          exchangeId: selectedExchangeId,
-          marketSymbol,
-          positionSizeUsd,
-        };
-
-        if (!canUseFirebase) {
-          const mockBot: BotInstance = {
-            id: `demo_${Date.now()}`,
-            uid: "demo-user",
-            type: draft.botType,
-            exchangeId: draft.exchangeId,
-            marketSymbol: draft.marketSymbol,
-            status: profile && profile.feeWalletBalance > 0 ? "pending_credentials" : "stopped_insufficient_balance",
-            positionSizeUsd: draft.positionSizeUsd,
-            feeRate: selectedPlan.feeRate,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-
-          setBots((currentBots) => [mockBot, ...currentBots]);
-          return;
-        }
-
-        await createBotInstance(draft);
-      },
-      "Bot subscription created. Cloud Functions will start it after credentials and balance checks pass.",
-    );
+    await runAction(async () => {
+      if (selectedMarketSymbols.length === 0) throw new Error("Select at least one trading pair.");
+      if (!canUseFirebase) throw new Error("Sign in with a real Firebase account first.");
+      const draft: BotConfigurationDraft = {
+        botType: selectedBotType,
+        exchangeId: selectedExchangeId,
+        marketSymbols: selectedMarketSymbols,
+        positionSizeUsd,
+      };
+      await createBotInstance(draft);
+    }, "Bot launched! Cloud Functions will start it after credential and wallet checks.");
   }
 
   async function handleTopUpRequest() {
-    await runAction(
-      async () => {
-        if (!canUseFirebase) {
-          setProfile((currentProfile) =>
-            currentProfile
-              ? {
-                  ...currentProfile,
-                  feeWalletBalance: currentProfile.feeWalletBalance + topUpAmount,
-                  updatedAt: new Date().toISOString(),
-                }
-              : demoProfile,
-          );
-          return;
-        }
+    await runAction(async () => {
+      if (!canUseFirebase || !user) throw new Error("Sign in before funding the wallet.");
+      await requestFeeWalletTopUp(user.uid, topUpAmount);
+    }, "Funding request recorded.");
+  }
 
-        await requestFeeWalletTopUp(user.uid, topUpAmount);
-      },
-      "Funding request recorded. Connect your payment provider before approving real balances.",
-    );
+  const showLoginView = view === "full" || view === "login";
+  const showDashboardView = view === "full" || view === "dashboard";
+  const showSettingsView = view === "full" || view === "settings";
+
+  return (
+    <div className="app-shell">
+      <div style={{ position: "relative", zIndex: 1 }}>
+
+        {showLoginView && (
+          <div style={sectionStyle}>
+            <AuthSection
+              email={email}
+              password={password}
+              isBusy={isBusy}
+              firebaseConfigured={firebaseConfigured}
+              statusMessage={statusMessage}
+              statusTone={statusTone}
+              onEmailChange={setEmail}
+              onPasswordChange={setPassword}
+              onGoogleSignIn={() => runAction(signInWithGoogle, "Signed in with Google.")}
+              onEmailSubmit={handleEmailSubmit}
+            />
+          </div>
+        )}
+
+        {showDashboardView && (
+          <div style={sectionStyle}>
+            <DashboardSection
+              bots={activeBots}
+              ledger={activeLedger}
+              walletBalance={activeProfile?.feeWalletBalance ?? 0}
+            />
+          </div>
+        )}
+
+        {showSettingsView && (
+          <div style={sectionStyle}>
+            <SettingsSection
+              selectedBotType={selectedBotType}
+              selectedExchangeId={selectedExchangeId}
+              selectedMarketSymbols={selectedMarketSymbols}
+              availableMarketSymbols={availableMarketSymbols}
+              positionSizeUsd={positionSizeUsd}
+              topUpAmount={topUpAmount}
+              credentials={credentials}
+              projectedFee={projectedFee}
+              isBusy={isBusy}
+              statusMessage={statusMessage}
+              statusTone={statusTone}
+              onBotTypeChange={setSelectedBotType}
+              onExchangeChange={handleExchangeChange}
+              onMarketSymbolsChange={setSelectedMarketSymbols}
+              onPositionSizeChange={setPositionSizeUsd}
+              onTopUpAmountChange={setTopUpAmount}
+              onCredentialsChange={setCredentials}
+              onConnectExchange={handleConnectExchange}
+              onCreateBot={handleCreateBot}
+              onTopUp={handleTopUpRequest}
+            />
+          </div>
+        )}
+
+        {/* Risk notice */}
+        <div style={{ ...sectionStyle, paddingTop: 0 }}>
+          <div
+            style={{
+              padding: "1rem 1.25rem",
+              borderRadius: "var(--radius)",
+              border: "1px solid var(--border)",
+              background: "rgba(7,13,28,0.6)",
+              fontSize: "0.8rem",
+              lineHeight: 1.7,
+              color: "var(--fg-3)",
+            }}
+          >
+            <strong style={{ color: "var(--fg-2)" }}>Risk notice:</strong> This platform is a development scaffold,
+            not financial advice. Futures trading and leverage can cause rapid losses. A production deployment
+            requires exchange adapters, KMS-encrypted secrets, payment settlement, kill switches, and jurisdiction checks
+            before any live trading.
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+/* â”€â”€â”€ Auth section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function AuthSection({
+  email, password, isBusy, firebaseConfigured,
+  statusMessage, statusTone,
+  onEmailChange, onPasswordChange, onGoogleSignIn, onEmailSubmit,
+}: {
+  email: string; password: string; isBusy: boolean; firebaseConfigured: boolean;
+  statusMessage: string; statusTone: "success" | "error" | "info";
+  onEmailChange: (v: string) => void; onPasswordChange: (v: string) => void;
+  onGoogleSignIn: () => void; onEmailSubmit: (mode: "login" | "register") => Promise<void>;
+}) {
+  return (
+    <div style={{ display: "grid", gap: "1.5rem", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", alignItems: "start" }}>
+
+      {/* Left: hero copy */}
+      <div className="card-glow" style={{ padding: "clamp(1.5rem, 4vw, 2.5rem)" }}>
+        <span className="badge badge-brand" style={{ marginBottom: "1.25rem", display: "inline-flex" }}>
+          Cloud Functions \u00b7 Firebase
+        </span>
+        <h1
+          className="text-gradient"
+          style={{ fontSize: "clamp(1.75rem, 4vw, 2.75rem)", fontWeight: 900, lineHeight: 1.18, marginBottom: "1rem", letterSpacing: "-0.02em" }}
+        >
+          Trade smarter. Pay less. Automate everything.
+        </h1>
+        <p style={{ fontSize: "0.9375rem", lineHeight: 1.75, color: "var(--fg-2)", marginBottom: "1.5rem" }}>
+          Connect a futures exchange, pick your pairs, and let GridPilot run support/resistance or
+          grid martingale bots 24/7. Only pay 2% when a trade closes.
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
+          {["Email + Google auth", "Encrypted API keys", "2% fee ledger"].map((item) => (
+            <div
+              key={item}
+              style={{
+                padding: "0.75rem",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+                background: "rgba(7,13,28,0.6)",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                color: "var(--fg-2)",
+                textAlign: "center",
+              }}
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Right: auth form */}
+      <div className="card" style={{ padding: "clamp(1.5rem, 4vw, 2rem)" }}>
+        <h2 style={{ fontSize: "1.375rem", fontWeight: 900, color: "var(--fg)", marginBottom: "0.375rem" }}>
+          Trader access
+        </h2>
+        <p style={{ fontSize: "0.85rem", color: "var(--fg-2)", marginBottom: "1.5rem", lineHeight: 1.6 }}>
+          Sign in to manage bots, wallet, and exchange settings.
+        </p>
+
+        {/* Google */}
+        <button
+          className="btn btn-secondary btn-full"
+          style={{ marginBottom: "1rem", gap: "0.625rem", justifyContent: "center" }}
+          disabled={isBusy || !firebaseConfigured}
+          type="button"
+          onClick={onGoogleSignIn}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 01-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.616z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/>
+            <path d="M3.964 10.71A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+          </svg>
+          Continue with Google
+        </button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", margin: "0 0 1rem" }}>
+          <div className="divider" style={{ flex: 1, margin: 0 }} />
+          <span style={{ fontSize: "0.75rem", color: "var(--fg-3)", fontWeight: 600 }}>or email</span>
+          <div className="divider" style={{ flex: 1, margin: 0 }} />
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginBottom: "1rem" }}>
+          <div>
+            <label className="input-label">Email address</label>
+            <input
+              className="input-field"
+              placeholder="you@example.com"
+              type="email"
+              value={email}
+              onChange={(e) => onEmailChange(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="input-label">Password</label>
+            <input
+              className="input-field"
+              placeholder="\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+              type="password"
+              value={password}
+              onChange={(e) => onPasswordChange(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+          <button
+            className="btn btn-primary"
+            disabled={isBusy || !firebaseConfigured}
+            type="button"
+            onClick={() => onEmailSubmit("login")}
+          >
+            {isBusy ? "\u2026" : "Sign in"}
+          </button>
+          <button
+            className="btn btn-secondary"
+            disabled={isBusy || !firebaseConfigured}
+            type="button"
+            onClick={() => onEmailSubmit("register")}
+          >
+            Create account
+          </button>
+        </div>
+
+        {!firebaseConfigured && (
+          <div
+            style={{
+              marginTop: "1rem",
+              padding: "0.75rem 1rem",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--amber-dim)",
+              border: "1px solid rgba(251,191,36,0.25)",
+              fontSize: "0.8rem",
+              color: "var(--amber)",
+            }}
+          >
+            Firebase is not configured. Add NEXT_PUBLIC_FIREBASE_* env vars to enable authentication.
+          </div>
+        )}
+
+        <StatusMessage message={statusMessage} tone={statusTone} />
+      </div>
+
+    </div>
+  );
+}
+
+/* â”€â”€â”€ Dashboard section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function DashboardSection({
+  bots, ledger, walletBalance,
+}: {
+  bots: BotInstance[];
+  ledger: TradeLedgerEntry[];
+  walletBalance: number;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+
+      {/* Page header */}
+      <div>
+        <h1 style={{ fontSize: "1.75rem", fontWeight: 900, color: "var(--fg)", marginBottom: "0.25rem" }}>Dashboard</h1>
+        <p style={{ fontSize: "0.875rem", color: "var(--fg-2)" }}>Monitor bots, track fees, and review trade history.</p>
+      </div>
+
+      {/* Metric cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: "1rem" }}>
+        <MetricCard
+          icon={<IconWallet size={20} />}
+          label="Fee wallet"
+          value={formatCurrency(walletBalance)}
+          sub="Available balance"
+          tone="green"
+        />
+        <MetricCard
+          icon={<IconBot size={20} />}
+          label="Active bots"
+          value={String(bots.length)}
+          sub="Running / pending"
+          tone="brand"
+        />
+        <MetricCard
+          icon={<IconTrendUp size={20} />}
+          label="Trade fee"
+          value="2%"
+          sub="Per completed trade"
+          tone="amber"
+        />
+        <MetricCard
+          icon={<IconList size={20} />}
+          label="Ledger entries"
+          value={String(ledger.length)}
+          sub="Total recorded trades"
+          tone="purple"
+        />
+      </div>
+
+      {/* Bot list */}
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontWeight: 900, fontSize: "1rem", color: "var(--fg)" }}>Active bots</h2>
+          <span className="badge badge-brand">{bots.length} total</span>
+        </div>
+
+        {bots.length === 0 ? (
+          <div style={{ padding: "3rem", textAlign: "center" }}>
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: "0.75rem", color: "var(--fg-3)" }}><IconBot size={40} /></div>
+            <p style={{ fontWeight: 700, color: "var(--fg)", marginBottom: "0.375rem" }}>No bots yet</p>
+            <p style={{ fontSize: "0.85rem", color: "var(--fg-2)" }}>
+              Head to <strong>Settings</strong> to configure and launch your first bot.
+            </p>
+          </div>
+        ) : (
+          <div>
+            {bots.map((bot) => {
+              const exchange = getExchangeById(bot.exchangeId);
+              const plan = botPlans.find((p) => p.type === bot.type);
+              const status = bot.status.replaceAll("_", " ");
+              const isActive = bot.status === "active";
+              const isPending = bot.status === "pending_credentials" || bot.status === "draft";
+
+              return (
+                <div
+                  key={bot.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    alignItems: "center",
+                    padding: "1rem 1.5rem",
+                    borderBottom: "1px solid var(--border)",
+                    gap: "1rem",
+                    transition: "background 120ms",
+                  }}
+                >
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", marginBottom: "0.25rem" }}>
+                      <span
+                        className={`status-dot ${isActive ? "active" : isPending ? "pending" : "stopped"}`}
+                      />
+                      <p style={{ fontWeight: 800, fontSize: "0.9375rem", color: "var(--fg)" }}>
+                        {plan?.name ?? bot.type}
+                      </p>
+                    </div>
+                    <p style={{ fontSize: "0.8rem", color: "var(--fg-2)" }}>
+                      {exchange?.name ?? bot.exchangeId}
+                      {"\u00b7"}&nbsp;
+                      {(bot.marketSymbols ?? []).slice(0, 4).join(", ")}
+                      {(bot.marketSymbols?.length ?? 0) > 4 && ` +${(bot.marketSymbols?.length ?? 0) - 4} more`}
+                      &nbsp;{"\u00b7"}&nbsp;
+                      {formatCurrency(bot.positionSizeUsd)} position
+                    </p>
+                  </div>
+                  <span
+                    className={`badge ${isActive ? "badge-green" : isPending ? "badge-amber" : "badge-brand"}`}
+                  >
+                    {status}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Fee ledger */}
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontWeight: 900, fontSize: "1rem", color: "var(--fg)" }}>Fee ledger</h2>
+          <span className="badge badge-amber">{ledger.length} entries</span>
+        </div>
+
+        {ledger.length === 0 ? (
+          <div style={{ padding: "3rem", textAlign: "center" }}>
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: "0.75rem", color: "var(--fg-3)" }}><IconList size={40} /></div>
+            <p style={{ fontWeight: 700, color: "var(--fg)", marginBottom: "0.375rem" }}>No trades yet</p>
+            <p style={{ fontSize: "0.85rem", color: "var(--fg-2)" }}>Completed trades will appear here with fee breakdowns.</p>
+          </div>
+        ) : (
+          <div>
+            {/* Table header */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1.2fr 0.8fr 0.8fr",
+                padding: "0.625rem 1.5rem",
+                borderBottom: "1px solid var(--border)",
+                fontSize: "0.7rem",
+                fontWeight: 700,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                color: "var(--fg-3)",
+              }}
+            >
+              <span>Pair</span>
+              <span>Side / Outcome</span>
+              <span>Fee</span>
+              <span>Balance after</span>
+            </div>
+            {ledger.map((entry) => (
+              <div
+                key={entry.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1.2fr 0.8fr 0.8fr",
+                  padding: "0.875rem 1.5rem",
+                  borderBottom: "1px solid var(--border)",
+                  fontSize: "0.875rem",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                }}
+              >
+                <span style={{ fontWeight: 700, color: "var(--fg)" }}>{entry.marketSymbol}</span>
+                <span style={{ color: "var(--fg-2)", textTransform: "capitalize" }}>{entry.side} {"\u00b7"} {entry.outcome}</span>
+                <span style={{ color: "var(--amber)", fontWeight: 700 }}>{formatCurrency(entry.feeCharged)}</span>
+                <span style={{ color: "var(--fg-2)" }}>{formatCurrency(entry.walletBalanceAfter)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+/* â”€â”€â”€ Settings section â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function SettingsSection({
+  selectedBotType, selectedExchangeId, selectedMarketSymbols, availableMarketSymbols,
+  positionSizeUsd, topUpAmount, credentials, projectedFee, isBusy,
+  statusMessage, statusTone,
+  onBotTypeChange, onExchangeChange, onMarketSymbolsChange,
+  onPositionSizeChange, onTopUpAmountChange, onCredentialsChange,
+  onConnectExchange, onCreateBot, onTopUp,
+}: {
+  selectedBotType: BotType; selectedExchangeId: ExchangeId;
+  selectedMarketSymbols: string[]; availableMarketSymbols: string[];
+  positionSizeUsd: number; topUpAmount: number;
+  credentials: ExchangeCredentialDraft; projectedFee: number; isBusy: boolean;
+  statusMessage: string; statusTone: "success" | "error" | "info";
+  onBotTypeChange: (t: BotType) => void; onExchangeChange: (id: ExchangeId) => void;
+  onMarketSymbolsChange: (s: string[]) => void; onPositionSizeChange: (n: number) => void;
+  onTopUpAmountChange: (n: number) => void; onCredentialsChange: (c: ExchangeCredentialDraft) => void;
+  onConnectExchange: () => Promise<void>; onCreateBot: () => Promise<void>; onTopUp: () => Promise<void>;
+}) {
+  const selectedExchange = getExchangeById(selectedExchangeId) ?? supportedExchanges[0];
+  const selectedPlan = botPlans.find((p) => p.type === selectedBotType) ?? botPlans[0];
+
+  function toggleSymbol(symbol: string) {
+    if (selectedMarketSymbols.includes(symbol)) {
+      onMarketSymbolsChange(selectedMarketSymbols.filter((s) => s !== symbol));
+    } else {
+      onMarketSymbolsChange([...selectedMarketSymbols, symbol]);
+    }
   }
 
   return (
-    <main className="app-shell min-h-screen overflow-hidden px-5 py-6 text-slate-100 sm:px-8 lg:px-12">
-      <section className="mx-auto flex w-full max-w-7xl flex-col gap-8">
-        <Header
-          firebaseConfigured={firebaseConfigured}
-          userEmail={user?.email ?? profile?.email ?? null}
-          onGoogleSignIn={() => runAction(signInWithGoogle, "Signed in with Google.")}
-          onSignOut={() => runAction(signOutCurrentUser, "Signed out.")}
-        />
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
 
-        <section className="grid gap-6 lg:grid-cols-[1.04fr_0.96fr]">
-          <HeroPanel />
-          <AuthPanel
-            email={email}
-            password={password}
-            isBusy={isBusy}
-            firebaseConfigured={firebaseConfigured}
-            statusMessage={statusMessage}
-            onEmailChange={setEmail}
-            onPasswordChange={setPassword}
-            onDemoLogin={handleDemoLogin}
-            onGoogleSignIn={() => runAction(signInWithGoogle, "Signed in with Google.")}
-            onEmailSubmit={handleEmailSubmit}
-          />
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-3">
-          <MetricCard label="Fee wallet" value={formatCurrency(profile?.feeWalletBalance ?? 0)} tone="green" />
-          <MetricCard label="Active / pending bots" value={String(bots.length)} tone="blue" />
-          <MetricCard label="Fee per completed trade" value="2% of position size" tone="amber" />
-        </section>
-
-        <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
-          <ConfigurationPanel
-            selectedBotType={selectedBotType}
-            selectedExchangeId={selectedExchangeId}
-            marketSymbol={marketSymbol}
-            positionSizeUsd={positionSizeUsd}
-            topUpAmount={topUpAmount}
-            credentials={credentials}
-            projectedFee={projectedFee}
-            isBusy={isBusy}
-            onBotTypeChange={setSelectedBotType}
-            onExchangeChange={setSelectedExchangeId}
-            onMarketSymbolChange={setMarketSymbol}
-            onPositionSizeChange={setPositionSizeUsd}
-            onTopUpAmountChange={setTopUpAmount}
-            onCredentialsChange={setCredentials}
-            onConnectExchange={handleConnectExchange}
-            onCreateBot={handleCreateBot}
-            onTopUp={handleTopUpRequest}
-          />
-
-          <DashboardPanel bots={bots} ledger={ledger} />
-        </section>
-
-        <ExchangePanel />
-
-        <section className="glass-panel rounded-[2rem] p-6 text-sm leading-6 text-slate-300">
-          <strong className="text-slate-100">Risk notice:</strong> This application is a platform scaffold, not financial advice.
-          Futures trading, leverage, hedged grids, and martingale sizing can cause rapid losses. Production deployment must add
-          exchange-specific adapters, encryption/KMS for API secrets, payment settlement, rate-limit handling, audit logs, kill
-          switches, and jurisdiction checks before allowing live trading.
-        </section>
-      </section>
-    </main>
-  );
-}
-
-function Header({
-  firebaseConfigured,
-  userEmail,
-  onGoogleSignIn,
-  onSignOut,
-}: {
-  firebaseConfigured: boolean;
-  userEmail: string | null;
-  onGoogleSignIn: () => void;
-  onSignOut: () => void;
-}) {
-  return (
-    <header className="flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/[0.03] p-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* Page header */}
       <div>
-        <p className="text-sm font-bold uppercase tracking-[0.35em] text-sky-300">GridPilot</p>
-        <h1 className="text-2xl font-black tracking-tight text-white">Firebase Trading Bot Platform</h1>
+        <h1 style={{ fontSize: "1.75rem", fontWeight: 900, color: "var(--fg)", marginBottom: "0.25rem" }}>Settings</h1>
+        <p style={{ fontSize: "0.875rem", color: "var(--fg-2)" }}>Configure your strategy, exchange, pairs, and launch bots.</p>
       </div>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <span className="rounded-full border border-slate-700 px-4 py-2 text-sm text-slate-300">
-          {firebaseConfigured ? "Firebase ready" : "Demo mode"}
-        </span>
-        {userEmail ? (
-          <button className="secondary-button" onClick={onSignOut} type="button">
-            Sign out {userEmail}
-          </button>
-        ) : (
-          <button className="secondary-button" onClick={onGoogleSignIn} type="button" disabled={!firebaseConfigured}>
-            Continue with Google
-          </button>
-        )}
-      </div>
-    </header>
-  );
-}
 
-function HeroPanel() {
-  return (
-    <article className="glass-panel-strong rounded-[2.5rem] p-8 sm:p-10">
-      <p className="mb-4 inline-flex rounded-full border border-sky-400/30 bg-sky-400/10 px-4 py-2 text-sm font-bold text-sky-200">
-        Cloud Functions managed execution
-      </p>
-      <h2 className="text-gradient max-w-3xl text-4xl font-black tracking-tight sm:text-6xl">
-        Subscribe to trading bots. Connect a futures exchange. Pay per completed trade.
-      </h2>
-      <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-300">
-        Users sign in with email or Google, fund a fee wallet, choose an exchange, and activate either a support/resistance bot or
-        a hedged grid martingale bot. Cloud Functions own execution, fee deduction, and auto-stop safeguards.
-      </p>
-      <div className="mt-8 grid gap-4 sm:grid-cols-3">
-        {["Email + Google auth", "Encrypted API key flow", "2% fee ledger"].map((item) => (
-          <div key={item} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-sm font-bold text-slate-200">
-            {item}
+      {/* Step 1 â€” Strategy */}
+      <SettingsBlock
+        step="01"
+        title="Choose strategy"
+        desc="Select the trading algorithm your bot will use."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "0.875rem" }}>
+          {botPlans.map((plan) => (
+            <button
+              key={plan.type}
+              type="button"
+              onClick={() => onBotTypeChange(plan.type)}
+              style={{
+                padding: "1.25rem",
+                borderRadius: "var(--radius)",
+                border: `1px solid ${selectedBotType === plan.type ? "rgba(56,189,248,0.5)" : "var(--border)"}`,
+                background: selectedBotType === plan.type ? "var(--brand-dim)" : "rgba(7,13,28,0.6)",
+                textAlign: "left",
+                cursor: "pointer",
+                transition: "all 160ms",
+              }}
+            >
+              <p style={{ fontWeight: 800, fontSize: "0.9375rem", color: selectedBotType === plan.type ? "var(--brand)" : "var(--fg)", marginBottom: "0.375rem" }}>
+                {plan.name}
+              </p>
+              <p style={{ fontSize: "0.8rem", color: "var(--fg-2)", lineHeight: 1.6, marginBottom: "0.75rem" }}>
+                {plan.summary}
+              </p>
+              <span className="badge badge-green" style={{ fontSize: "0.68rem" }}>
+                2% fee only · no subscription
+              </span>
+            </button>
+          ))}
+        </div>
+      </SettingsBlock>
+
+      {/* Step 2 â€” Exchange + sizing */}
+      <SettingsBlock
+        step="02"
+        title="Exchange & sizing"
+        desc="Choose your futures exchange and position size."
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.875rem" }}>
+          <div>
+            <label className="input-label">Futures exchange</label>
+            <select
+              className="input-field"
+              value={selectedExchangeId}
+              onChange={(e) => onExchangeChange(e.target.value as ExchangeId)}
+            >
+              {supportedExchanges.map((ex) => (
+                <option key={ex.id} value={ex.id}>{ex.name}</option>
+              ))}
+            </select>
           </div>
-        ))}
+          <div>
+            <label className="input-label">Position size (USD)</label>
+            <input
+              className="input-field"
+              type="number"
+              min={10}
+              value={positionSizeUsd}
+              onChange={(e) => onPositionSizeChange(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className="input-label">Wallet top-up (USD)</label>
+            <input
+              className="input-field"
+              type="number"
+              min={1}
+              value={topUpAmount}
+              onChange={(e) => onTopUpAmountChange(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {/* Exchange info strip */}
+        <div
+          style={{
+            marginTop: "0.875rem",
+            padding: "0.875rem 1rem",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "rgba(7,13,28,0.5)",
+            fontSize: "0.8rem",
+            color: "var(--fg-2)",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.75rem",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontWeight: 700, color: "var(--fg)" }}>{selectedExchange.name}</span>
+          <span>{"\u00b7"}</span>
+          <span>{selectedExchange.regionNote}</span>
+          <span>{"\u00b7"}</span>
+          <span style={{ color: "var(--amber)", fontWeight: 700 }}>
+            Projected fee: {formatCurrency(projectedFee)} per trade
+          </span>
+        </div>
+        <p style={{ marginTop: "0.5rem", fontSize: "0.78rem", color: "var(--fg-3)", lineHeight: 1.6 }}>
+          {selectedPlan.riskWarning}
+        </p>
+      </SettingsBlock>
+
+      {/* Step 3 â€” Trading pairs */}
+      <SettingsBlock
+        step="03"
+        title="Trading pairs"
+        desc={`Top 100 USDT perps filtered for ${selectedExchange.name}. ${selectedMarketSymbols.length} selected.`}
+      >
+        <div
+          style={{
+            maxHeight: "16rem",
+            overflowY: "auto",
+            padding: "0.75rem",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid var(--border)",
+            background: "rgba(4,6,15,0.5)",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.45rem",
+          }}
+        >
+          {availableMarketSymbols.map((symbol) => {
+            const on = selectedMarketSymbols.includes(symbol);
+            return (
+              <button
+                key={symbol}
+                type="button"
+                className={`pair-chip${on ? " selected" : ""}`}
+                onClick={() => toggleSymbol(symbol)}
+              >
+                {on && <IconCheck size={12} style={{ color: "var(--brand)", flexShrink: 0 }} />}
+                {symbol.replace("USDT", "")}
+                <span style={{ opacity: 0.5, fontSize: "0.65rem" }}>USDT</span>
+              </button>
+            );
+          })}
+        </div>
+        <p style={{ marginTop: "0.5rem", fontSize: "0.78rem", color: "var(--fg-3)" }}>
+          {selectedMarketSymbols.length === 0
+            ? "No pairs selected \u2014 you must pick at least one."
+            : `Selected: ${selectedMarketSymbols.join(", ")}`}
+        </p>
+      </SettingsBlock>
+
+      {/* Step 4 â€” API credentials */}
+      <SettingsBlock
+        step="04"
+        title="API credentials"
+        desc={`Enter your ${selectedExchange.name} API key. Keys are routed through Cloud Functions \u2014 never stored client-side.`}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {selectedExchange.credentialFields.map((field) => (
+            <div key={field.key}>
+              <label className="input-label">
+                {field.label}
+                {field.required && <span style={{ color: "var(--red)", marginLeft: "0.25rem" }}>*</span>}
+              </label>
+              <input
+                className="input-field"
+                placeholder={field.label}
+                type={field.secret ? "password" : "text"}
+                value={credentials[field.key]}
+                onChange={(e) => onCredentialsChange({ ...credentials, [field.key]: e.target.value })}
+              />
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: "1rem" }}>
+          <button
+            className="btn btn-secondary"
+            disabled={isBusy}
+            type="button"
+            onClick={onConnectExchange}
+          >
+            {isBusy ? "Saving\u2026" : "Save API key"}
+          </button>
+        </div>
+      </SettingsBlock>
+
+      {/* Step 5 â€” Launch */}
+      <SettingsBlock
+        step="05"
+        title="Fund & launch"
+        desc="Top up your fee wallet and start the bot."
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+          <button className="btn btn-secondary" disabled={isBusy} type="button" onClick={onTopUp}>
+            {isBusy ? "…" : "Fund wallet"}
+          </button>
+          <button className="btn btn-primary" disabled={isBusy} type="button" onClick={onCreateBot}>
+            {isBusy ? "Launching…" : <><IconRocket size={15} style={{ verticalAlign: "middle", marginRight: "0.375rem" }} />Start bot</>}
+          </button>
+        </div>
+        <StatusMessage message={statusMessage} tone={statusTone} />
+      </SettingsBlock>
+
+      {/* Exchange catalog */}
+      <div className="card" style={{ overflow: "hidden" }}>
+        <div style={{ padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+          <div>
+            <h2 style={{ fontWeight: 900, fontSize: "1rem", color: "var(--fg)" }}>Supported exchanges</h2>
+            <p style={{ fontSize: "0.8rem", color: "var(--fg-2)", marginTop: "0.2rem" }}>Futures API integrations planned.</p>
+          </div>
+          <span className="badge badge-brand">{supportedExchanges.length} planned</span>
+        </div>
+        <div style={{ padding: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.875rem" }}>
+          {supportedExchanges.map((ex) => (
+            <div
+              key={ex.id}
+              style={{
+                padding: "1rem",
+                borderRadius: "var(--radius-sm)",
+                border: "1px solid var(--border)",
+                background: "rgba(7,13,28,0.5)",
+                transition: "border-color 160ms",
+              }}
+            >
+              <p style={{ fontWeight: 800, fontSize: "0.9rem", color: "var(--fg)", marginBottom: "0.375rem" }}>{ex.name}</p>
+              <p style={{ fontSize: "0.75rem", color: "var(--fg-2)", lineHeight: 1.6, marginBottom: "0.625rem" }}>
+                {ex.futuresProducts.join(", ")}
+              </p>
+              <a
+                href={ex.apiDocsUrl}
+                target="_blank"
+                rel="noreferrer"
+                style={{ fontSize: "0.78rem", fontWeight: 700, color: "var(--brand)", textDecoration: "none" }}
+              >
+                API docs â†’
+              </a>
+            </div>
+          ))}
+        </div>
       </div>
-    </article>
+
+    </div>
   );
 }
 
-function AuthPanel({
-  email,
-  password,
-  isBusy,
-  firebaseConfigured,
-  statusMessage,
-  onEmailChange,
-  onPasswordChange,
-  onDemoLogin,
-  onGoogleSignIn,
-  onEmailSubmit,
+/* â”€â”€â”€ SettingsBlock wrapper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function SettingsBlock({
+  step, title, desc, children,
 }: {
-  email: string;
-  password: string;
-  isBusy: boolean;
-  firebaseConfigured: boolean;
-  statusMessage: string;
-  onEmailChange: (email: string) => void;
-  onPasswordChange: (password: string) => void;
-  onDemoLogin: () => void;
-  onGoogleSignIn: () => void;
-  onEmailSubmit: (mode: "login" | "register") => Promise<void>;
+  step: string; title: string; desc: string; children: React.ReactNode;
 }) {
   return (
-    <section className="glass-panel rounded-[2.5rem] p-6 sm:p-8">
-      <h2 className="text-2xl font-black text-white">Trader access</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-400">
-        Configure Firebase Authentication to enable real email/password and Google sign-in.
-      </p>
-      <div className="mt-6 space-y-3">
-        <input className="input-field" placeholder="Email address" value={email} onChange={(event) => onEmailChange(event.target.value)} />
-        <input
-          className="input-field"
-          placeholder="Password"
-          type="password"
-          value={password}
-          onChange={(event) => onPasswordChange(event.target.value)}
-        />
+    <div className="card" style={{ padding: "1.5rem" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: "1rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
+        <span
+          style={{
+            width: "2rem",
+            height: "2rem",
+            borderRadius: "0.625rem",
+            background: "linear-gradient(135deg, #0ea5e9, #34d399)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: "0.7rem",
+            fontWeight: 900,
+            color: "#01080f",
+            flexShrink: 0,
+          }}
+        >
+          {step}
+        </span>
+        <div>
+          <h2 style={{ fontWeight: 900, fontSize: "1.0625rem", color: "var(--fg)", lineHeight: 1.2 }}>{title}</h2>
+          <p style={{ fontSize: "0.825rem", color: "var(--fg-2)", marginTop: "0.25rem", lineHeight: 1.5 }}>{desc}</p>
+        </div>
       </div>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-        <button className="primary-button" disabled={isBusy || !firebaseConfigured} onClick={() => onEmailSubmit("login")} type="button">
-          Sign in
-        </button>
-        <button className="secondary-button" disabled={isBusy || !firebaseConfigured} onClick={() => onEmailSubmit("register")} type="button">
-          Create account
-        </button>
-      </div>
-      <button className="mt-3 w-full secondary-button" disabled={isBusy || !firebaseConfigured} onClick={onGoogleSignIn} type="button">
-        Continue with Google
-      </button>
-      <button className="mt-3 w-full secondary-button" disabled={isBusy} onClick={onDemoLogin} type="button">
-        Load demo dashboard
-      </button>
-      {statusMessage ? <p className="mt-5 rounded-2xl bg-slate-950/70 p-4 text-sm text-slate-300">{statusMessage}</p> : null}
-    </section>
+      {children}
+    </div>
   );
 }
 
-function MetricCard({ label, value, tone }: { label: string; value: string; tone: "green" | "blue" | "amber" }) {
-  const toneClass = {
-    green: "text-emerald-300",
-    blue: "text-sky-300",
-    amber: "text-amber-300",
+/* â”€â”€â”€ MetricCard â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function MetricCard({
+  icon, label, value, sub, tone,
+}: {
+  icon: React.ReactNode; label: string; value: string; sub: string;
+  tone: "brand" | "green" | "amber" | "purple";
+}) {
+  const toneMap = {
+    brand:  { text: "var(--brand)",  bg: "var(--brand-dim)",  border: "rgba(56,189,248,0.2)" },
+    green:  { text: "var(--green)",  bg: "var(--green-dim)",  border: "rgba(52,211,153,0.2)" },
+    amber:  { text: "var(--amber)",  bg: "var(--amber-dim)",  border: "rgba(251,191,36,0.2)" },
+    purple: { text: "var(--purple)", bg: "var(--purple-dim)", border: "rgba(167,139,250,0.2)" },
   }[tone];
 
   return (
-    <article className="glass-panel rounded-[2rem] p-6">
-      <p className="text-sm font-bold uppercase tracking-[0.22em] text-slate-500">{label}</p>
-      <p className={`mt-3 text-3xl font-black ${toneClass}`}>{value}</p>
-    </article>
-  );
-}
-
-function ConfigurationPanel({
-  selectedBotType,
-  selectedExchangeId,
-  marketSymbol,
-  positionSizeUsd,
-  topUpAmount,
-  credentials,
-  projectedFee,
-  isBusy,
-  onBotTypeChange,
-  onExchangeChange,
-  onMarketSymbolChange,
-  onPositionSizeChange,
-  onTopUpAmountChange,
-  onCredentialsChange,
-  onConnectExchange,
-  onCreateBot,
-  onTopUp,
-}: {
-  selectedBotType: BotType;
-  selectedExchangeId: ExchangeId;
-  marketSymbol: string;
-  positionSizeUsd: number;
-  topUpAmount: number;
-  credentials: ExchangeCredentialDraft;
-  projectedFee: number;
-  isBusy: boolean;
-  onBotTypeChange: (type: BotType) => void;
-  onExchangeChange: (exchangeId: ExchangeId) => void;
-  onMarketSymbolChange: (symbol: string) => void;
-  onPositionSizeChange: (size: number) => void;
-  onTopUpAmountChange: (amount: number) => void;
-  onCredentialsChange: (credentials: ExchangeCredentialDraft) => void;
-  onConnectExchange: () => Promise<void>;
-  onCreateBot: () => Promise<void>;
-  onTopUp: () => Promise<void>;
-}) {
-  const selectedExchange = getExchangeById(selectedExchangeId) ?? supportedExchanges[0];
-  const selectedPlan = botPlans.find((plan) => plan.type === selectedBotType) ?? botPlans[0];
-
-  return (
-    <section className="glass-panel rounded-[2.5rem] p-6 sm:p-8">
-      <h2 className="text-2xl font-black text-white">Subscribe and configure</h2>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        {botPlans.map((plan) => (
-          <button
-            key={plan.type}
-            className={`rounded-3xl border p-5 text-left transition ${
-              selectedBotType === plan.type ? "border-sky-400 bg-sky-400/10" : "border-slate-700 bg-slate-950/35 hover:border-sky-700"
-            }`}
-            onClick={() => onBotTypeChange(plan.type)}
-            type="button"
-          >
-            <p className="text-lg font-black text-white">{plan.name}</p>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{plan.summary}</p>
-            <p className="mt-4 text-sm font-bold text-emerald-300">{formatCurrency(plan.monthlyPrice)} / month + 2% trade fee</p>
-          </button>
-        ))}
+    <div
+      className="stat-card"
+      style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}
+    >
+      <div
+        className="feature-icon"
+        style={{ background: toneMap.bg, border: `1px solid ${toneMap.border}`, flexShrink: 0 }}
+      >
+        {icon}
       </div>
-
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2 text-sm font-bold text-slate-300">
-          Futures exchange
-          <select className="input-field" value={selectedExchangeId} onChange={(event) => onExchangeChange(event.target.value as ExchangeId)}>
-            {supportedExchanges.map((exchange) => (
-              <option key={exchange.id} value={exchange.id}>
-                {exchange.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="space-y-2 text-sm font-bold text-slate-300">
-          Market symbol
-          <input className="input-field" value={marketSymbol} onChange={(event) => onMarketSymbolChange(event.target.value.toUpperCase())} />
-        </label>
-        <label className="space-y-2 text-sm font-bold text-slate-300">
-          Position size
-          <input
-            className="input-field"
-            min={10}
-            type="number"
-            value={positionSizeUsd}
-            onChange={(event) => onPositionSizeChange(Number(event.target.value))}
-          />
-        </label>
-        <label className="space-y-2 text-sm font-bold text-slate-300">
-          Fee wallet top-up
-          <input
-            className="input-field"
-            min={1}
-            type="number"
-            value={topUpAmount}
-            onChange={(event) => onTopUpAmountChange(Number(event.target.value))}
-          />
-        </label>
-      </div>
-
-      <div className="mt-5 rounded-3xl border border-slate-700 bg-slate-950/45 p-5 text-sm leading-6 text-slate-300">
-        <p className="font-bold text-white">Selected exchange: {selectedExchange.name}</p>
-        <p className="mt-1">{selectedExchange.regionNote}</p>
-        <p className="mt-3 font-bold text-amber-300">Projected fee per completed trade: {formatCurrency(projectedFee)}</p>
-        <p className="mt-3 text-slate-400">{selectedPlan.riskWarning}</p>
-      </div>
-
-      <div className="mt-6 space-y-3">
-        <h3 className="font-black text-white">API credentials</h3>
-        {selectedExchange.credentialFields.map((field) => (
-          <input
-            key={field.key}
-            className="input-field"
-            placeholder={`${field.label}${field.required ? " *" : ""}`}
-            type={field.secret ? "password" : "text"}
-            value={credentials[field.key]}
-            onChange={(event) => onCredentialsChange({ ...credentials, [field.key]: event.target.value })}
-          />
-        ))}
-        <p className="text-xs leading-5 text-slate-500">
-          Production flow must send credentials only to Cloud Functions and store encrypted secrets server-side. Never write raw API keys to client-readable Firestore docs.
+      <div>
+        <p style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--fg-3)", marginBottom: "0.25rem" }}>
+          {label}
         </p>
+        <p style={{ fontSize: "1.625rem", fontWeight: 900, color: toneMap.text, lineHeight: 1 }}>{value}</p>
+        <p style={{ fontSize: "0.75rem", color: "var(--fg-2)", marginTop: "0.25rem" }}>{sub}</p>
       </div>
-
-      <div className="mt-6 grid gap-3 sm:grid-cols-3">
-        <button className="secondary-button" disabled={isBusy} onClick={onTopUp} type="button">
-          Fund wallet
-        </button>
-        <button className="secondary-button" disabled={isBusy} onClick={onConnectExchange} type="button">
-          Save API key
-        </button>
-        <button className="primary-button" disabled={isBusy} onClick={onCreateBot} type="button">
-          Start bot
-        </button>
-      </div>
-    </section>
+    </div>
   );
 }
 
-function DashboardPanel({ bots, ledger }: { bots: BotInstance[]; ledger: TradeLedgerEntry[] }) {
+/* â”€â”€â”€ StatusMessage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+function StatusMessage({ message, tone }: { message: string; tone: "success" | "error" | "info" }) {
+  if (!message) return null;
+
+  const styles = {
+    success: { bg: "var(--green-dim)",  border: "rgba(52,211,153,0.25)",  text: "var(--green)" },
+    error:   { bg: "var(--red-dim)",    border: "rgba(248,113,113,0.25)", text: "var(--red)"   },
+    info:    { bg: "var(--brand-dim)",  border: "rgba(56,189,248,0.25)",  text: "var(--brand)" },
+  }[tone];
+
   return (
-    <section className="glass-panel rounded-[2.5rem] p-6 sm:p-8">
-      <h2 className="text-2xl font-black text-white">Dashboard</h2>
-      <div className="mt-6 space-y-4">
-        {bots.map((bot) => {
-          const exchange = getExchangeById(bot.exchangeId);
-          const plan = botPlans.find((item) => item.type === bot.type);
-
-          return (
-            <article key={bot.id} className="rounded-3xl border border-slate-700 bg-slate-950/45 p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-lg font-black text-white">{plan?.name ?? bot.type}</p>
-                  <p className="mt-1 text-sm text-slate-400">
-                    {exchange?.name ?? bot.exchangeId} • {bot.marketSymbol} • {formatCurrency(bot.positionSizeUsd)} position
-                  </p>
-                </div>
-                <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-3 py-1 text-xs font-black uppercase tracking-[0.18em] text-sky-200">
-                  {bot.status.replaceAll("_", " ")}
-                </span>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-
-      <h3 className="mt-8 text-xl font-black text-white">Fee ledger</h3>
-      <div className="mt-4 overflow-hidden rounded-3xl border border-slate-700">
-        {ledger.map((entry) => (
-          <div key={entry.id} className="grid gap-2 border-b border-slate-800 bg-slate-950/35 p-4 text-sm last:border-b-0 sm:grid-cols-4">
-            <span className="font-bold text-white">{entry.marketSymbol}</span>
-            <span className="capitalize text-slate-300">{entry.side} • {entry.outcome}</span>
-            <span className="text-amber-300">Fee {formatCurrency(entry.feeCharged)}</span>
-            <span className="text-slate-400">Balance {formatCurrency(entry.walletBalanceAfter)}</span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function ExchangePanel() {
-  return (
-    <section className="glass-panel rounded-[2.5rem] p-6 sm:p-8">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="text-2xl font-black text-white">Supported futures exchanges</h2>
-          <p className="mt-2 text-sm text-slate-400">Initial exchange catalog with futures API support. Confirm regional eligibility during onboarding.</p>
-        </div>
-        <span className="text-sm font-bold text-sky-300">{supportedExchanges.length} integrations planned</span>
-      </div>
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {supportedExchanges.map((exchange) => (
-          <article key={exchange.id} className="rounded-3xl border border-slate-700 bg-slate-950/35 p-5">
-            <h3 className="text-lg font-black text-white">{exchange.name}</h3>
-            <p className="mt-2 text-sm leading-6 text-slate-400">{exchange.futuresProducts.join(", ")}</p>
-            <a className="mt-4 inline-flex text-sm font-bold text-sky-300 hover:text-sky-200" href={exchange.apiDocsUrl} target="_blank" rel="noreferrer">
-              API docs →
-            </a>
-          </article>
-        ))}
-      </div>
-    </section>
+    <div
+      style={{
+        marginTop: "1rem",
+        padding: "0.75rem 1rem",
+        borderRadius: "var(--radius-sm)",
+        background: styles.bg,
+        border: `1px solid ${styles.border}`,
+        fontSize: "0.85rem",
+        color: styles.text,
+        fontWeight: 600,
+      }}
+    >
+      {tone === "success" && "OK: "}
+      {tone === "error" && "Error: "}
+      {message}
+    </div>
   );
 }
